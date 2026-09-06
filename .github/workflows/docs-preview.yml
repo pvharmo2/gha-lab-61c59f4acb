@@ -1,0 +1,98 @@
+name: Preview documents
+on:
+  pull_request_target:
+    paths:
+      - 'document/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  attestations: write
+  id-token: write
+  pull-requests: write
+
+jobs:
+  build-images:
+    timeout-minutes: 20
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Get current datetime
+        id: datetime
+        run: echo "datetime=$(date +'%Y%m%d%H%M%S')" >> $GITHUB_OUTPUT
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          # list of Docker images to use as base name for tags
+          images: |
+            ${{ secrets.FASTGPT_ALI_IMAGE_PREFIX }}/fastgpt-docs
+          tags: |
+            ${{ steps.datetime.outputs.datetime }}
+          flavor: latest=false
+
+      - name: Login to Aliyun
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: registry.cn-hangzhou.aliyuncs.com
+          username: ${{ secrets.FASTGPT_ALI_IMAGE_USER }}
+          password: ${{ secrets.FASTGPT_ALI_IMAGE_PSW }}
+
+      - name: Build and push Docker images
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
+        with:
+          context: ./document
+          file: ./document/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            FASTGPT_HOME_DOMAIN=https://fastgpt.io
+    outputs:
+      tags: ${{ steps.datetime.outputs.datetime }}
+
+  update-images:
+    timeout-minutes: 20
+    needs: build-images
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      # Add kubeconfig setup step to handle encoding issues
+      - name: Setup kubeconfig
+        run: |
+          mkdir -p $HOME/.kube
+          echo "${{ secrets.KUBE_CONFIG_CN }}" > $HOME/.kube/config
+          chmod 600 $HOME/.kube/config
+
+      - name: Update deployment image
+        run: |
+          kubectl set image deployment/fastgpt-docs-preview fastgpt-docs-preview=${{ secrets.FASTGPT_ALI_IMAGE_PREFIX }}/fastgpt-docs:${{ needs.build-images.outputs.tags }}
+
+      - name: Annotate deployment
+        run: |
+          kubectl annotate deployment/fastgpt-docs-preview originImageName="${{ secrets.FASTGPT_ALI_IMAGE_PREFIX }}/fastgpt-docs:${{ needs.build-images.outputs.tags }}" --overwrite
+
+      - name: '@finleyge/github-tools'
+        uses: FinleyGe/github-tools@322f5f37f864d01860b109eab5497271643dec34 # 0.0.1
+        id: print-image-label
+        if: success()
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tool: issue-comment
+          title: 'Docs Preview:'
+          body: |
+            ---
+            🚀 **FastGPT Document Preview Ready!**
+
+            🔗 [👀 Click here to visit preview](https://pueuoharpgcl.sealoshzh.site)
