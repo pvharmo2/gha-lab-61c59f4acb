@@ -45,9 +45,9 @@ jobs:
       - name: Login to Aliyun Container Registry
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
-          registry: registry.cn-hangzhou.aliyuncs.com
-          username: ${{ secrets.FASTGPT_ALI_IMAGE_USER }}
-          password: ${{ secrets.FASTGPT_ALI_IMAGE_PSW }}
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set image config
         id: config
